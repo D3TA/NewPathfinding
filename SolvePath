@@ -1,0 +1,151 @@
+local PathfindingService = ({});
+local RealPathfindingService = game:GetService("PathfindingService")
+PathfindingService.__index = PathfindingService;
+
+function clerp(a,b,t)
+	return a:Lerp(b,t < 1 and math.clamp(t*1,0,1) or 1)
+end
+
+
+function PathfindingService.new(Model:Instance, AgentParams, HipHeight, WalkSpeed)
+	local self = {}
+	if Model:IsA("Model") then
+		self = {
+			Model = Model;
+			HumanoidRootPart = Model.PrimaryPart;
+			Humanoid = Model:FindFirstChildWhichIsA("Humanoid");
+			Path = RealPathfindingService:CreatePath(AgentParams);
+			WalkSpeed = WalkSpeed;
+			NextPathIndex = 0;
+			__displayPath = {}
+		}
+		self.Humanoid.WalkSpeed = self.WalkSpeed
+	elseif Model:IsA("BasePart") then
+		self = {
+			Part = Model;
+			Path = RealPathfindingService:CreatePath(AgentParams);
+			NextPathIndex = 0;
+			CFrame = Model.CFrame;
+			HipHeight = HipHeight;
+			PotientalCFrame = Model.CFrame;
+			WalkSpeed = WalkSpeed;
+			Timing = {Throttle = tick(), LastFrame = tick()};
+			__displayPath = {}
+		}
+	end
+	return setmetatable(self, PathfindingService)
+end
+
+function PathfindingService:UpdateWalkSpeed(Speed : number)
+	if self.Model then
+		self.WalkSpeed = Speed
+		self.Humanoid.WalkSpeed = self.WalkSpeed
+	elseif self.Part then
+		self.WalkSpeed = Speed
+	end
+end
+
+local function displayPaths(self, waypoints)
+	for n, x in pairs(self.__displayPath) do
+		x:Destroy()
+	end
+
+	local attachment = Instance.new("Attachment")
+	local beam = Instance.new("Beam")
+
+	beam.FaceCamera = true
+	beam.Texture = "rbxassetid://7962064707"
+	beam.Color = ColorSequence.new(Color3.new(math.random(), math.random(), math.random()))
+
+	attachment.Visible = false
+
+	for n, x in ipairs(waypoints) do
+		local att = attachment:Clone()
+		att.Parent = workspace.Terrain
+		if self.Model then
+			att.Position = x.Position + Vector3.new((self.HumanoidRootPart:GetPivot().Position - Vector3.new(0,  self.Humanoid.HipHeight, 0)))
+		elseif self.Part then
+			att.Position = x.Position + Vector3.new((self.HumanoidRootPart:GetPivot().Position - Vector3.new(0,  self.HipHeight, 0)))
+		end
+		if n ~= 1 then
+			local beamConnection = beam:Clone()
+			beamConnection.Attachment1 = att
+			beamConnection.Attachment0 = self.__displayPath[n - 1]
+			beamConnection.Parent = att
+		end
+
+		self.__displayPath[n] = att
+	end
+end
+
+function PathfindingService:ComputeAndPathTo(position:Vector3, velocity:Vector3)
+	if self.Model then
+		local PathSuccess, PathFailed = pcall(function()
+			self.Path:ComputeAsync(self.HumanoidRootPart.Position, position)
+		end)
+		if PathSuccess and self.Path.Status == Enum.PathStatus.Success then
+			if self.NextPathIndex <= #self.Path:GetWaypoints() then
+				task.defer(function()
+					self.NextPathIndex += 1
+				end)
+			else
+				task.defer(function()
+					self.NextPathIndex = 2
+				end)
+			end
+			if self.Path:GetWaypoints()[self.NextPathIndex] then
+				if game:GetService("RunService"):IsStudio() then
+					displayPaths(self, self.Path:GetWaypoints())
+				end
+				--if self.Path:GetWaypoints()[self.NextPathIndex].Action == Enum.PathWaypointAction.Jump then
+				--	self.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+				--end
+				if velocity then
+					self.Humanoid:MoveTo(self.Path:GetWaypoints()[self.NextPathIndex].Position + (velocity/3))
+				else
+					self.Humanoid:MoveTo(self.Path:GetWaypoints()[self.NextPathIndex].Position)
+				end
+			end
+		else
+			--print(PathFailed)
+			
+		end
+	elseif self.Part then
+		self.Timing.Throttle = (tick()-self.Timing.LastFrame)/(1/60)
+		self.Timing.LastFrame = tick()
+		local OldCFrame = self.CFrame
+
+		local PathSuccess, PathFailed = pcall(function()
+			self.Path:ComputeAsync(self.CFrame.Position, position)
+		end)
+		if PathSuccess and self.Path.Status == Enum.PathStatus.Success then
+			if self.NextPathIndex <= #self.Path:GetWaypoints() then
+				self.NextPathIndex += 1
+			else
+				self.NextPathIndex = 2
+			end
+			pcall(function()
+				if self.Path:GetWaypoints()[self.NextPathIndex].Action == Enum.PathWaypointAction.Jump then
+					self.PotientalCFrame *= CFrame.new(0, 3, 0)
+				end
+				if velocity then
+					self.PotientalCFrame = CFrame.new((self.Path:GetWaypoints()[self.NextPathIndex].Position + (velocity/3))) * CFrame.new(0, self.HipHeight, 0)
+				else
+					self.PotientalCFrame = CFrame.new((self.Path:GetWaypoints()[self.NextPathIndex].Position)) * CFrame.new(0, self.HipHeight, 0)
+				end
+			end)
+		else
+			--print(PathFailed)
+		end
+
+		if (self.PotientalCFrame.X ~= OldCFrame.X or self.PotientalCFrame.Z ~= OldCFrame.Z) and self.WalkSpeed > 0 then
+			self.CFrame = CFrame.new(self.CFrame.Position,self.PotientalCFrame.Position)*CFrame.new(0,0,-((self.WalkSpeed/60)*self.Timing.Throttle))
+			self.CFrame = CFrame.new(self.CFrame.Position)*(OldCFrame-OldCFrame.Position)
+			self.CFrame = clerp(self.CFrame,CFrame.new(self.CFrame.Position,Vector3.new(OldCFrame.X,self.CFrame.Y,OldCFrame.Z))*CFrame.Angles(0,math.rad(180),0),.15)
+		end
+
+		self.Part.CFrame = self.CFrame
+	end
+end
+
+return PathfindingService
